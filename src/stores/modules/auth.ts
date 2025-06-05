@@ -1,4 +1,3 @@
-
 import { defineStore } from 'pinia'
 import service from '@/api/request'
 import { ref, computed, watch } from 'vue'
@@ -14,7 +13,7 @@ export const useAuthStore = defineStore('auth', () => {
   const menuList = ref(JSON.parse(localStorage.getItem('menuList') || '[]'))
   const isRoutesReady = ref(false)
   const isLoading = ref(false)
-
+  const routeInitPending = ref(false)
   // 计算属性：判断用户是否已登录
   const isAuthenticated = computed(() => !!token.value)
 
@@ -24,7 +23,7 @@ export const useAuthStore = defineStore('auth', () => {
     if (isRoutesReady.value) return true
 
     try {
-      // 添加基础路由（只在应用初始化时执行一次）
+      // 添加基础路由
       addConstantRoutes()
 
       // 如果用户已登录，加载动态路由
@@ -32,11 +31,23 @@ export const useAuthStore = defineStore('auth', () => {
         return await loadAsyncRoutes()
       }
 
+      // 添加404路由（未登录状态）
+      if (!router.hasRoute('NotFound')) {
+        router.addRoute({
+          path: '/:pathMatch(.*)*',
+          name: 'NotFound',
+          component: () => import('@/views/404.vue'),
+          meta: { requiresAuth: false },
+        })
+      }
+
       isRoutesReady.value = true
       return true
     } catch (error) {
       console.error('初始化路由失败:', error)
       return false
+    } finally {
+      routeInitPending.value = false
     }
   }
 
@@ -121,7 +132,8 @@ export const useAuthStore = defineStore('auth', () => {
       if (routesLoaded) {
         // 跳转到登录前的页面或首页
         const redirect = router.currentRoute.value.query.redirect || '/'
-        router.push(redirect as string)
+        // 使用name而不是path，确保路由名称正确
+        router.push({ name: 'Main', path: redirect })
         ElMessage.success('登录成功')
         return response.data
       } else {
@@ -134,7 +146,6 @@ export const useAuthStore = defineStore('auth', () => {
       isLoading.value = false
     }
   }
-
   // 登出方法
   const logout = () => {
     // 重置状态
@@ -177,6 +188,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     loadAsyncRoutes,
     logout,
+    routeInitPending,
     refreshRoutes,
   }
 })

@@ -1,4 +1,4 @@
-// router/index.js - 修复后的完整代码
+// router/index.js
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/modules/auth'
 import { ElMessage } from 'element-plus'
@@ -12,44 +12,32 @@ const constantRoutes = [
     meta: { requiresAuth: false },
   },
   {
-    path: '/404',
-    name: 'NotFound',
-    component: () => import('@/views/404.vue'),
-    meta: { requiresAuth: false },
-  },
-  {
-    // 定义主布局路由
+    // 主布局路由必须放在404路由前
     path: '/',
     name: 'Main',
     component: () => import('@/views/Main.vue'),
     redirect: '/home',
     meta: {
       title: '首页',
+      requiresAuth: true,
     },
     children: [], // 动态路由将添加到这里
   },
   {
-    path: '/:pathMatch(.*)*',
-    redirect: '/404',
+    path: '/404',
+    name: 'NotFound',
+    component: () => import('@/views/404.vue'),
     meta: { requiresAuth: false },
-    beforeEnter: (to: any, from: any, next: any) => {
-      // 确保动态路由加载完成后再检查
-      const authStore = useAuthStore()
-      if (!authStore.isRoutesReady) {
-        next(false) // 阻止导航，等待路由加载
-        return
-      }
-      next()
-    },
   },
+  // 移除这里的通配符路由，统一在addAsyncRoutes中处理
 ]
 
 const router = createRouter({
   history: createWebHistory(),
-  routes: constantRoutes, // 直接使用基础路由初始化
+  routes: constantRoutes,
 })
 
-// 添加基础路由（保留此方法但简化）
+// 添加基础路由
 export const addConstantRoutes = () => {
   constantRoutes.forEach((route) => {
     if (!router.hasRoute(route.name as string)) {
@@ -67,23 +55,18 @@ export const resetRouter = () => {
   })
 }
 
-// 动态添加异步路由
+// 动态添加异步路由 - 修改后的版本
 export const addAsyncRoutes = (routes: any) => {
-  // 确保Main路由已存在
   const mainRoute = router.getRoutes().find((r) => r.name === 'Main')
   if (!mainRoute) {
     console.error('Main路由未找到，无法添加子路由')
     return false
   }
 
-  // 处理动态路由，确保路径格式正确
   routes.forEach((route: any) => {
-    // 移除路径开头的斜杠，避免子路由路径问题
-    if (route.path.startsWith('/')) {
-      route.path = route.path.slice(1)
-    }
+    // 规范化路径
+    route.path = route.path.replace(/^\/+/, '') // 移除开头斜杠
 
-    // 添加路由前检查名称是否存在
     if (router.hasRoute(route.name)) {
       console.warn(`路由名称 ${route.name} 已存在，跳过添加`)
       return
@@ -92,46 +75,62 @@ export const addAsyncRoutes = (routes: any) => {
     router.addRoute('Main', route)
   })
 
+  // 添加兜底404路由（确保在最后）
+  if (!router.hasRoute('NotFound')) {
+    router.addRoute({
+      path: '/:pathMatch(.*)*',
+      name: 'NotFound',
+      component: () => import('@/views/404.vue'),
+      meta: { requiresAuth: false },
+    })
+  }
+
   return true
 }
 
-// 全局前置守卫
+// 全局前置守卫 - 修改后的版本
 router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
 
-  // 1. 首先放行白名单路由
-  if (['Login', 'NotFound'].includes(to.name as string)) {
+  // 1. 放行白名单路由
+  if (to.name === 'Login' || to.name === 'NotFound') {
     next()
     return
   }
 
-  // 2. 检查 Token 是否存在
+  // 2. 检查认证状态
   if (!authStore.isAuthenticated) {
     ElMessage.error('会话已过期，请重新登录')
-    next({ path: '/login', query: { redirect: to.fullPath } })
+    next({ name: 'Login', query: { redirect: to.fullPath } })
     return
   }
 
-  // 3. 验证动态路由状态
+  // 3. 确保动态路由已加载
   if (!authStore.isRoutesReady) {
     try {
-      await authStore.initAppRoutes()
-      // 重定向到原始目标路由（处理动态路由加载后的刷新问题）
+      // 防止重复初始化
+      if (!authStore.routeInitPending) {
+        authStore.routeInitPending = true
+        await authStore.initAppRoutes()
+      }
+
+      // 重新解析路由并跳转
       next({ ...to, replace: true })
     } catch (error) {
       console.error('路由初始化失败:', error)
-      next({ path: '/login' })
+      next({ name: 'Login' })
     }
     return
   }
 
-  // 4. 验证路由是否存在
-  if (!router.hasRoute(to.name || '') && to.path !== '/404') {
-    next({ name: 'NotFound' })
+  // 4. 检查路由是否存在
+  if (!router.hasRoute(to.name as string)) {
+    next({ name: 'NotFound', query: { originalPath: to.fullPath } })
     return
   }
 
   // 5. 最终放行
   next()
 })
+
 export default router
